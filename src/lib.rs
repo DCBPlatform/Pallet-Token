@@ -16,7 +16,7 @@ mod tests;
 
 pub trait Trait: system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
-	type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
+	type Currency: ReservableCurrency<Self::AccountId>;
 }
 
 pub type TokenIndex = u32;
@@ -35,16 +35,16 @@ pub struct TokenInfo<AccountId, BlockNumber> {
 }
 
 decl_storage! {
-	trait Store for Module<T: Trait> as Token {
+	trait Store for Module<T: Trait> as TokenStore {
 
 		pub Tokens get(fn tokens): map hasher(blake2_128_concat) TokenIndex => Option<TokenInfoOf<T>>;
 		pub TokenCount get(fn token_count): TokenIndex;
 
-		pub TokenBalance get(fn token_balance): map hasher(blake2_128_concat) (u32, T::AccountId) => BalanceOf<T>;
-		pub TokenSupply get(fn token_supply): map hasher(blake2_128_concat) u32 => BalanceOf<T>;
-		pub TokenPaused get(fn token_paused): map hasher(blake2_128_concat) u32 => bool;
-		pub TokenApproval get(fn token_approval): map hasher(blake2_128_concat) (u32, T::AccountId, T::AccountId) => BalanceOf<T>;
-		pub TokenOwner get(fn token_owner): map hasher(blake2_128_concat) u32 => T::AccountId;
+		pub Balance get(fn balance): map hasher(blake2_128_concat) (u32, T::AccountId) => BalanceOf<T>;
+		pub Supply get(fn supply): map hasher(blake2_128_concat) u32 => BalanceOf<T>;
+		pub Paused get(fn paused): map hasher(blake2_128_concat) u32 => bool;
+		pub Approval get(fn approval): map hasher(blake2_128_concat) (u32, T::AccountId, T::AccountId) => BalanceOf<T>;
+		pub Owner get(fn owner): map hasher(blake2_128_concat) u32 => T::AccountId;
 	}
 }
 
@@ -85,7 +85,7 @@ decl_module! {
 
 
 		#[weight = 10_000]
-		fn create(origin, 
+		pub fn create(origin, 
 			owner:AccountIdOf<T>, 
 			name:Vec<u8>, 
 			symbol: Vec<u8>, 
@@ -106,9 +106,9 @@ decl_module! {
 				created
 			});			
 
-			<TokenBalance<T>>::insert((index, &caller), initial_supply);
-			<TokenSupply<T>>::insert(index, initial_supply);
-			<TokenOwner<T>>::insert(index, &caller);
+			<Balance<T>>::insert((index, &caller), initial_supply);
+			<Supply<T>>::insert(index, initial_supply);
+			<Owner<T>>::insert(index, &caller);
 
 			Self::deposit_event(RawEvent::Created(index, caller));
 
@@ -122,14 +122,7 @@ decl_module! {
 			value: BalanceOf<T> 
 		) -> DispatchResult {
 			let caller = ensure_signed(origin)?;
-
-			let sender_balance = Self::token_balance((token, &caller));
-			let receiver_balance = Self::token_balance((token, &to));
-
-			<TokenBalance<T>>::insert((token, &caller), sender_balance - value);
-			<TokenBalance<T>>::insert((token, &to), receiver_balance + value);
-
-			Self::deposit_event(RawEvent::Transfer(token, caller, to, value));
+			Self::transfer_(token, caller, to, value);
 			Ok(())
 		}	
 		
@@ -140,89 +133,93 @@ decl_module! {
 			value: BalanceOf<T> 
 		) -> DispatchResult {
 			let to = ensure_signed(origin)?;
-
-			let from_balance = Self::token_balance((token, &from));
-			let to_balance = Self::token_balance((token, &to));
-
-			<TokenBalance<T>>::insert((token, &from), from_balance - value);
-			<TokenBalance<T>>::insert((token, &to), to_balance + value);
-
-			Self::deposit_event(RawEvent::TransferFrom(token, from, to, value));
+			Self::transfer_(token, from, to, value);
 			Ok(())
 		}			
 
 		
 		#[weight = 10_000]
-		fn pause(origin, 
+		pub fn pause(origin, 
 			token: u32, 
 			status: bool 
 		) -> DispatchResult {
 			let caller = ensure_signed(origin)?;
-			let token_owner = Self::token_owner(token);
+			let token_owner = Self::owner(token);
 			ensure!(caller == token_owner, <Error<T>>::NotTokenOwner);
 
-			let token_boolean = Self::token_paused(token);
+			let token_boolean = Self::paused(token);
 			let new_status: bool;
 			if token_boolean {
 				new_status = true;
 			} else {	
 				new_status = false;			
 			}
-			<TokenPaused>::insert(token, new_status);			
+			<Paused>::insert(token, new_status);			
 			Self::deposit_event(RawEvent::PausedOperation(token, new_status));
 			Ok(())
 		}	
 		
 		#[weight = 10_000]
-		fn mint(origin, 
+		pub fn mint(origin, 
 			token:u32, 
 			value: BalanceOf<T> 
 		) -> DispatchResult {
 			let caller = ensure_signed(origin)?;
-			let token_owner = Self::token_owner(token);
+			let token_owner = Self::owner(token);
 			ensure!(caller == token_owner, <Error<T>>::NotTokenOwner);			
-
-			let minter_balance = Self::token_balance((token, &caller));
-			let token_supply = Self::token_supply(token);
-
-			<TokenBalance<T>>::insert((token, &caller), minter_balance + value);
-			<TokenSupply<T>>::insert(token, token_supply + value);
-
-			Self::deposit_event(RawEvent::Mint(token, caller, value));
+			Self::mint_(caller, token, value);
 			Ok(())
 		}	
 		
 		#[weight = 10_000]
-		fn burn(origin, 
+		pub fn burn(origin, 
 			token:u32, 
 			value: BalanceOf<T> 
 		) -> DispatchResult {
 			let caller = ensure_signed(origin)?;
-			let token_owner = Self::token_owner(token);
+			let token_owner = Self::owner(token);
 			ensure!(caller == token_owner, <Error<T>>::NotTokenOwner);			
-
-			let burner_balance = Self::token_balance((token, &caller));
-			let token_supply = Self::token_supply(token);
-
-			<TokenBalance<T>>::insert((token, &caller), burner_balance - value);
-			<TokenSupply<T>>::insert(token, token_supply - value);
-
-			Self::deposit_event(RawEvent::Burn(token, caller, value));
+			Self::burn_(caller, token, value);
 			Ok(())
-		}				
-		
+		}	
 
-
+	
 	}
 }
 
 impl<T: Trait> Module<T> {
 
 	pub fn transfer_(token: u32, from: AccountIdOf<T>, to: AccountIdOf<T>, value: BalanceOf<T> ) -> () {
-		let from_balance = Self::token_balance((token, &from));
-		let to_balance = Self::token_balance((token, &to));
+		let from_balance = Self::balance((token, &from));
+		let to_balance = Self::balance((token, &to));
 
-		<TokenBalance<T>>::insert((token, &from), from_balance - value);
-		<TokenBalance<T>>::insert((token, &to), to_balance + value);
+		<Balance<T>>::insert((token, &from), from_balance - value);
+		<Balance<T>>::insert((token, &to), to_balance + value);
+		Self::deposit_event(RawEvent::Transfer(token, from, to, value));
 	}
+
+	pub fn mint_(minter: AccountIdOf<T>, token: u32, value: BalanceOf<T>) -> () {
+		let minter_balance = Self::balance((token, &minter));
+		let token_supply = Self::supply(token);
+		<Balance<T>>::insert((token, &minter), minter_balance + value);
+		<Supply<T>>::insert(token, token_supply + value);
+
+		Self::deposit_event(RawEvent::Mint(token, minter, value));
+	}
+
+	pub fn burn_(burner: AccountIdOf<T>, token: u32, value: BalanceOf<T>) -> () {
+		let burner_balance = Self::balance((token, &burner));
+		let token_supply = Self::supply(token);
+
+		<Balance<T>>::insert((token, &burner), burner_balance - value);
+		<Supply<T>>::insert(token, token_supply - value);
+
+		Self::deposit_event(RawEvent::Burn(token, burner, value));
+	}	
+
+	pub fn get_balance(token: u32, who: AccountIdOf<T> ) -> BalanceOf<T> {
+		Self::balance((token, who))
+	}		
+
+
 }

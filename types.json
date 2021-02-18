@@ -1,0 +1,10 @@
+{
+    "TokenInfoOf": "TokenInfo",
+    "TokenInfo": {
+      "name": "Vec<u8>",
+      "symbol": "Vec<u8>",
+      "owner": "AccountId",
+      "created": "BlockNumber"
+    },
+    "TokenIndex": "u32"
+}
